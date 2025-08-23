@@ -1,6 +1,7 @@
 import logging
 import os
 import json
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
@@ -17,22 +18,13 @@ def load_questions():
         with open('questions.json', 'r', encoding='utf-8') as f:
             return json.load(f)
     except FileNotFoundError:
-        # Пример вопросов по умолчанию
+        # Создаем минимальный пример если файла нет
         default_questions = {
             "1": {
-                "question": "Столица Франции?",
-                "options": ["Лондон", "Берлин", "Париж", "Мадрид"],
-                "correct_answer": 2
-            },
-            "2": {
-                "question": "2 + 2 * 2 = ?",
-                "options": ["6", "8", "4", "10"],
-                "correct_answer": 0
-            },
-            "3": {
-                "question": "Самая большая планета Солнечной системы?",
-                "options": ["Земля", "Марс", "Юпитер", "Сатурн"],
-                "correct_answer": 2
+                "question": "Пример вопроса?",
+                "options": ["Вариант A", "Вариант B", "Вариант C", "Вариант D"],
+                "correct_answer": [0],
+                "multiple": False
             }
         }
         with open('questions.json', 'w', encoding='utf-8') as f:
@@ -41,10 +33,12 @@ def load_questions():
 
 questions = load_questions()
 user_progress = {}
+user_answers = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_progress[user_id] = {"current_question": 1, "score": 0}
+    user_answers[user_id] = {}
     
     keyboard = [
         [InlineKeyboardButton("Начать тест", callback_data="start_test")]
@@ -53,6 +47,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         "Добро пожаловать в экзаменационный бот! 🎓\n\n"
+        "Тест содержит вопросы с одним и несколькими правильными ответами.\n"
+        "Вопросы с несколькими правильными ответами помечены специально.\n\n"
         "Нажмите 'Начать тест' чтобы начать.",
         reply_markup=reply_markup
     )
@@ -66,35 +62,127 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if user_id not in user_progress:
         user_progress[user_id] = {"current_question": 1, "score": 0}
+        user_answers[user_id] = {}
     
     if data == "start_test":
-        await show_question(update, context, user_id, "1")  # Исправлено: передаем строку
+        await show_question(update, context, user_id, "1")
     elif data.startswith("answer_"):
         parts = data.split("_")
         question_id = parts[1]
         answer_index = int(parts[2])
         
-        correct_answer = questions[question_id]["correct_answer"]
+        question = questions[question_id]
         
-        if answer_index == correct_answer:
-            user_progress[user_id]["score"] += 1
-            await show_answer_feedback(update, context, question_id, answer_index, True)
-        else:
-            await show_answer_feedback(update, context, question_id, answer_index, False)
+        # Для вопросов с множественным выбором
+        if question["multiple"]:
+            if user_id not in user_answers:
+                user_answers[user_id] = {}
+            if question_id not in user_answers[user_id]:
+                user_answers[user_id][question_id] = []
             
-        context.job_queue.run_once(
-            lambda ctx: show_next_question(context, user_id, question_id),
-            2,
-            name=f"next_question_{user_id}"
-        )
+            # Добавляем/удаляем ответ
+            if answer_index in user_answers[user_id][question_id]:
+                user_answers[user_id][question_id].remove(answer_index)
+            else:
+                user_answers[user_id][question_id].append(answer_index)
+                
+            # Показываем текущий выбор
+            await show_multiple_choice(update, context, user_id, question_id)
+        else:
+            # Для одиночного выбора
+            correct_answer = question["correct_answer"]
+            is_correct = answer_index in correct_answer
+            
+            if is_correct:
+                user_progress[user_id]["score"] += 1
+                await show_answer_feedback(update, context, question_id, answer_index, True)
+            else:
+                await show_answer_feedback(update, context, question_id, answer_index, False)
+            
+            # Задержка перед следующим вопросом
+            await asyncio.sleep(2)
+            await show_next_question(context, user_id, question_id)
+            
+    elif data.startswith("submit_"):
+        # Отправка ответов для множественного выбора
+        question_id = data.split("_")[1]
+        await check_multiple_answers(update, context, user_id, question_id)
+        
     elif data == "restart":
         user_progress[user_id] = {"current_question": 1, "score": 0}
-        await show_question(update, context, user_id, "1")  # Исправлено: передаем строку
+        user_answers[user_id] = {}
+        await show_question(update, context, user_id, "1")
+
+async def show_multiple_choice(update: Update, context: ContextTypes.DEFAULT_TYPE, 
+                              user_id: int, question_id: str):
+    query = update.callback_query
+    question = questions[question_id]
+    selected = user_answers[user_id].get(question_id, [])
+    
+    keyboard = []
+    for i, option in enumerate(question["options"]):
+        if i in selected:
+            button_text = f"✅ {option}"
+        else:
+            button_text = f"◻️ {option}"
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=f"answer_{question_id}_{i}")])
+    
+    # Кнопка отправки
+    keyboard.append([InlineKeyboardButton("✅ Отправить ответ", callback_data=f"submit_{question_id}")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        text=f"{question['question']}\n\nВыберите все правильные ответы:",
+        reply_markup=reply_markup
+    )
+
+async def check_multiple_answers(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                                user_id: int, question_id: str):
+    query = update.callback_query
+    question = questions[question_id]
+    selected = user_answers[user_id].get(question_id, [])
+    correct_answer = question["correct_answer"]
+    
+    # Сортируем для сравнения
+    selected_sorted = sorted(selected)
+    correct_sorted = sorted(correct_answer)
+    
+    is_correct = selected_sorted == correct_sorted
+    
+    # Подсветка правильных/неправильных ответов
+    keyboard = []
+    for i, option in enumerate(question["options"]):
+        if i in correct_answer:
+            button_text = f"✅ {option}"
+        elif i in selected:
+            button_text = f"❌ {option}"
+        else:
+            button_text = f"◻️ {option}"
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=f"dummy_{question_id}_{i}")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    if is_correct:
+        user_progress[user_id]["score"] += 1
+        message = "✅ Все ответы правильные! Молодец!"
+    else:
+        message = f"❌ Неправильно! Правильные ответы: {', '.join([chr(97 + i) for i in correct_answer])}"
+    
+    await query.edit_message_text(
+        text=f"{question['question']}\n\n{message}",
+        reply_markup=reply_markup
+    )
+    
+    # Задержка перед следующим вопросом
+    await asyncio.sleep(3)
+    await show_next_question(context, user_id, question_id)
 
 async def show_answer_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                              question_id: str, answer_index: int, is_correct: bool):
     query = update.callback_query
     question = questions[question_id]
+    correct_answer = question["correct_answer"]
     
     keyboard = []
     for i, option in enumerate(question["options"]):
@@ -103,10 +191,10 @@ async def show_answer_feedback(update: Update, context: ContextTypes.DEFAULT_TYP
                 button_text = f"✅ {option}"
             else:
                 button_text = f"❌ {option}"
-        elif i == question["correct_answer"] and not is_correct:
+        elif i in correct_answer:
             button_text = f"✅ {option}"
         else:
-            button_text = option
+            button_text = f"◻️ {option}"
             
         keyboard.append([InlineKeyboardButton(button_text, callback_data=f"dummy_{question_id}_{i}")])
     
@@ -115,7 +203,7 @@ async def show_answer_feedback(update: Update, context: ContextTypes.DEFAULT_TYP
     if is_correct:
         message = "✅ Правильно! Молодец!"
     else:
-        message = f"❌ Неправильно! Правильный ответ: {question['options'][question['correct_answer']]}"
+        message = f"❌ Неправильно! Правильный ответ: {', '.join([chr(97 + i) for i in correct_answer])}"
     
     await query.edit_message_text(
         text=f"{question['question']}\n\n{message}",
@@ -146,7 +234,7 @@ async def show_next_question(context, user_id, current_question_id):
 
 async def show_question(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                        user_id: int, question_id: str):
-    question = questions[question_id]  # Теперь работает правильно
+    question = questions[str(question_id)]
     
     keyboard = []
     for i, option in enumerate(question["options"]):
@@ -160,6 +248,8 @@ async def show_question(update: Update, context: ContextTypes.DEFAULT_TYPE,
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     text = f"Вопрос {question_id}/{len(questions)}\n\n{question['question']}"
+    if question["multiple"]:
+        text += "\n\n⚠️ Выберите ВСЕ правильные ответы!"
     
     if update and update.callback_query:
         await update.callback_query.edit_message_text(text, reply_markup=reply_markup)
