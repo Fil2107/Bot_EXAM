@@ -1,0 +1,192 @@
+import logging
+import os
+import json
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+
+# Настройка логирования
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# Загрузка вопросов
+def load_questions():
+    try:
+        with open('questions.json', 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        # Пример вопросов по умолчанию
+        default_questions = {
+            "1": {
+                "question": "Столица Франции?",
+                "options": ["Лондон", "Берлин", "Париж", "Мадрид"],
+                "correct_answer": 2
+            },
+            "2": {
+                "question": "2 + 2 * 2 = ?",
+                "options": ["6", "8", "4", "10"],
+                "correct_answer": 0
+            },
+            "3": {
+                "question": "Самая большая планета Солнечной системы?",
+                "options": ["Земля", "Марс", "Юпитер", "Сатурн"],
+                "correct_answer": 2
+            }
+        }
+        with open('questions.json', 'w', encoding='utf-8') as f:
+            json.dump(default_questions, f, ensure_ascii=False, indent=2)
+        return default_questions
+
+questions = load_questions()
+user_progress = {}
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_progress[user_id] = {"current_question": 1, "score": 0}
+    
+    keyboard = [
+        [InlineKeyboardButton("Начать тест", callback_data="start_test")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "Добро пожаловать в экзаменационный бот! 🎓\n\n"
+        "Нажмите 'Начать тест' чтобы начать.",
+        reply_markup=reply_markup
+    )
+
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    data = query.data
+    
+    if user_id not in user_progress:
+        user_progress[user_id] = {"current_question": 1, "score": 0}
+    
+    if data == "start_test":
+        await show_question(update, context, user_id, 1)
+    elif data.startswith("answer_"):
+        parts = data.split("_")
+        question_id = parts[1]
+        answer_index = int(parts[2])
+        
+        correct_answer = questions[question_id]["correct_answer"]
+        
+        if answer_index == correct_answer:
+            # Правильный ответ - зеленая кнопка
+            user_progress[user_id]["score"] += 1
+            await show_answer_feedback(update, context, question_id, answer_index, True)
+        else:
+            # Неправильный ответ - красная кнопка
+            await show_answer_feedback(update, context, question_id, answer_index, False)
+            
+        # Переход к следующему вопросу через 2 секунды
+        context.job_queue.run_once(
+            lambda ctx: show_next_question(update, context, user_id, question_id),
+            2,
+            name=f"next_question_{user_id}"
+        )
+    elif data == "restart":
+        user_progress[user_id] = {"current_question": 1, "score": 0}
+        await show_question(update, context, user_id, 1)
+
+async def show_answer_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE, 
+                             question_id: str, answer_index: int, is_correct: bool):
+    query = update.callback_query
+    question = questions[question_id]
+    
+    # Создаем клавиатуру с подсветкой
+    keyboard = []
+    for i, option in enumerate(question["options"]):
+        if i == answer_index:
+            if is_correct:
+                button_text = f"✅ {option}"
+            else:
+                button_text = f"❌ {option}"
+        elif i == question["correct_answer"] and not is_correct:
+            button_text = f"✅ {option}"
+        else:
+            button_text = option
+            
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=f"dummy_{question_id}_{i}")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    if is_correct:
+        message = "✅ Правильно! Молодец!"
+    else:
+        message = f"❌ Неправильно! Правильный ответ: {question['options'][question['correct_answer']]}"
+    
+    await query.edit_message_text(
+        text=f"{question['question']}\n\n{message}",
+        reply_markup=reply_markup
+    )
+
+async def show_next_question(context, user_id, current_question_id):
+    next_question_id = str(int(current_question_id) + 1)
+    
+    if next_question_id in questions:
+        user_progress[user_id]["current_question"] = int(next_question_id)
+        await show_question(None, context, user_id, next_question_id)
+    else:
+        # Тест завершен
+        score = user_progress[user_id]["score"]
+        total = len(questions)
+        
+        keyboard = [
+            [InlineKeyboardButton("Начать заново", callback_data="restart")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=f"🎉 Тест завершен!\nВаш результат: {score}/{total}\n\n"
+                 f"Процент правильных ответов: {round(score/total*100)}%",
+            reply_markup=reply_markup
+        )
+
+async def show_question(update: Update, context: ContextTypes.DEFAULT_TYPE, 
+                       user_id: int, question_id: str):
+    question = questions[question_id]
+    
+    keyboard = []
+    for i, option in enumerate(question["options"]):
+        keyboard.append([
+            InlineKeyboardButton(
+                f"{['A', 'B', 'C', 'D'][i]}. {option}", 
+                callback_data=f"answer_{question_id}_{i}"
+            )
+        ])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    text = f"Вопрос {question_id}/{len(questions)}\n\n{question['question']}"
+    
+    if update and update.callback_query:
+        await update.callback_query.edit_message_text(text, reply_markup=reply_markup)
+    else:
+        await context.bot.send_message(user_id, text, reply_markup=reply_markup)
+
+def main():
+    # Получаем токен из переменных окружения
+    TOKEN = os.getenv('TELEGRAM_TOKEN')
+    if not TOKEN:
+        logger.error("Токен не найден! Установите переменную окружения TELEGRAM_TOKEN")
+        return
+    
+    application = Application.builder().token(TOKEN).build()
+    
+    # Добавляем обработчики
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(handle_callback))
+    
+    # Запускаем бота
+    logger.info("Бот запущен!")
+    application.run_polling()
+
+if __name__ == "__main__":
+    main()
