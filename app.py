@@ -68,7 +68,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_progress[user_id] = {"current_question": 1, "score": 0}
     
     if data == "start_test":
-        await show_question(update, context, user_id, 1)
+        await show_question(update, context, user_id, "1")  # Исправлено: передаем строку
     elif data.startswith("answer_"):
         parts = data.split("_")
         question_id = parts[1]
@@ -77,29 +77,25 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         correct_answer = questions[question_id]["correct_answer"]
         
         if answer_index == correct_answer:
-            # Правильный ответ - зеленая кнопка
             user_progress[user_id]["score"] += 1
             await show_answer_feedback(update, context, question_id, answer_index, True)
         else:
-            # Неправильный ответ - красная кнопка
             await show_answer_feedback(update, context, question_id, answer_index, False)
             
-        # Переход к следующему вопросу через 2 секунды
         context.job_queue.run_once(
-            lambda ctx: show_next_question(update, context, user_id, question_id),
+            lambda ctx: show_next_question(context, user_id, question_id),
             2,
             name=f"next_question_{user_id}"
         )
     elif data == "restart":
         user_progress[user_id] = {"current_question": 1, "score": 0}
-        await show_question(update, context, user_id, 1)
+        await show_question(update, context, user_id, "1")  # Исправлено: передаем строку
 
 async def show_answer_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                              question_id: str, answer_index: int, is_correct: bool):
     query = update.callback_query
     question = questions[question_id]
     
-    # Создаем клавиатуру с подсветкой
     keyboard = []
     for i, option in enumerate(question["options"]):
         if i == answer_index:
@@ -133,7 +129,6 @@ async def show_next_question(context, user_id, current_question_id):
         user_progress[user_id]["current_question"] = int(next_question_id)
         await show_question(None, context, user_id, next_question_id)
     else:
-        # Тест завершен
         score = user_progress[user_id]["score"]
         total = len(questions)
         
@@ -151,7 +146,7 @@ async def show_next_question(context, user_id, current_question_id):
 
 async def show_question(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                        user_id: int, question_id: str):
-    question = questions[question_id]
+    question = questions[question_id]  # Теперь работает правильно
     
     keyboard = []
     for i, option in enumerate(question["options"]):
@@ -172,7 +167,6 @@ async def show_question(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await context.bot.send_message(user_id, text, reply_markup=reply_markup)
 
 def main():
-    # Получаем токен из переменных окружения
     TOKEN = os.getenv('TELEGRAM_TOKEN')
     if not TOKEN:
         logger.error("Токен не найден! Установите переменную окружения TELEGRAM_TOKEN")
@@ -180,11 +174,9 @@ def main():
     
     application = Application.builder().token(TOKEN).build()
     
-    # Добавляем обработчики
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(handle_callback))
     
-    # Запускаем бота
     logger.info("Бот запущен!")
     application.run_polling()
 
