@@ -18,7 +18,10 @@ def load_questions():
         with open('questions.json', 'r', encoding='utf-8') as f:
             return json.load(f)
     except FileNotFoundError:
+<<<<<<< HEAD
         # Создаем минимальный пример если файла нет
+=======
+>>>>>>> ba62384f2d716de3da40c8a3d9f1896e006a9dfc
         default_questions = {
             "1": {
                 "question": "Пример вопроса?",
@@ -73,6 +76,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         question = questions[question_id]
         
+<<<<<<< HEAD
         # Для вопросов с множественным выбором
         if question["multiple"]:
             if user_id not in user_answers:
@@ -177,6 +181,21 @@ async def check_multiple_answers(update: Update, context: ContextTypes.DEFAULT_T
     # Задержка перед следующим вопросом
     await asyncio.sleep(3)
     await show_next_question(context, user_id, question_id)
+=======
+        if answer_index == correct_answer:
+            user_progress[user_id]["score"] += 1
+            await show_answer_feedback(update, context, question_id, answer_index, True)
+        else:
+            await show_answer_feedback(update, context, question_id, answer_index, False)
+        
+        # Задержка перед следующим вопросом
+        await asyncio.sleep(2)
+        await show_next_question(context, user_id, question_id)
+        
+    elif data == "restart":
+        user_progress[user_id] = {"current_question": 1, "score": 0}
+        await show_question(update, context, user_id, "1")
+>>>>>>> ba62384f2d716de3da40c8a3d9f1896e006a9dfc
 
 async def show_answer_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                              question_id: str, answer_index: int, is_correct: bool):

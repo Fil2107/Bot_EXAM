@@ -1,0 +1,10 @@
+version: '3.8'
+
+services:
+  exam-bot:
+    build: .
+    environment:
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
+    restart: unless-stopped
+    volumes:
+      - ./questions.json:/app/questions.json
