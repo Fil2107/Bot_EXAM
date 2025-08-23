@@ -1,7 +1,6 @@
 import logging
 import os
 import json
-import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
@@ -18,6 +17,7 @@ def load_questions():
         with open('questions.json', 'r', encoding='utf-8') as f:
             return json.load(f)
     except FileNotFoundError:
+        # Пример вопросов по умолчанию
         default_questions = {
             "1": {
                 "question": "Столица Франции?",
@@ -82,7 +82,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await show_answer_feedback(update, context, question_id, answer_index, False)
         
-        # Задержка перед следующим вопросом
+        # Простая задержка вместо job_queue
+        import asyncio
         await asyncio.sleep(2)
         await show_next_question(context, user_id, question_id)
         
@@ -93,8 +94,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_answer_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                              question_id: str, answer_index: int, is_correct: bool):
     query = update.callback_query
-    question = questions[question_id]
+    question = questions[str(question_id)]
     
+    # Создаем клавиатуру с подсветкой
     keyboard = []
     for i, option in enumerate(question["options"]):
         if i == answer_index:
@@ -128,6 +130,7 @@ async def show_next_question(context, user_id, current_question_id):
         user_progress[user_id]["current_question"] = int(next_question_id)
         await show_question(None, context, user_id, next_question_id)
     else:
+        # Тест завершен
         score = user_progress[user_id]["score"]
         total = len(questions)
         
@@ -145,7 +148,7 @@ async def show_next_question(context, user_id, current_question_id):
 
 async def show_question(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                        user_id: int, question_id: str):
-    question = questions[str(question_id)]
+    question = questions[question_id]
     
     keyboard = []
     for i, option in enumerate(question["options"]):
@@ -166,6 +169,7 @@ async def show_question(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await context.bot.send_message(user_id, text, reply_markup=reply_markup)
 
 def main():
+    # Получаем токен из переменных окружения
     TOKEN = os.getenv('TELEGRAM_TOKEN')
     if not TOKEN:
         logger.error("Токен не найден! Установите переменную окружения TELEGRAM_TOKEN")
@@ -173,9 +177,11 @@ def main():
     
     application = Application.builder().token(TOKEN).build()
     
+    # Добавляем обработчики
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(handle_callback))
     
+    # Запускаем бота
     logger.info("Бот запущен!")
     application.run_polling()
 
